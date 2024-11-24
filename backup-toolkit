@@ -1,0 +1,207 @@
+#!/bin/bash
+
+if [ ! -e ~/.config/backup-toolkit/backup-tkit.config ]; then
+    if [ -f backup-tkit.config ]; then source backup-tkit.config; else echo "config is missing."; exit 1; fi
+else
+    source ~/.config/backup-toolkit/backup-tkit.config
+fi
+if [ -z "${extensions+x}" ]; then
+    extensions=()
+fi
+if [ -z ${path_to_script+x} ]; then
+    path_to_script=$(pwd)
+fi
+
+# check whether core dependencies are installed
+if ! which zip &> /dev/null || ! which unzip &> /dev/null; then echo "dependencies aren't installed."; exit 1; fi
+
+# options that will override the others (-h and -c)
+for arg in "$@"; do
+    if [ "$arg" == "-h" ]; then
+        printf "this is backup-toolkit, a simple script to store the backups of all the files in a given folder.\nbasic usage: backup-toolkit -p <path-to-your-folder>.\ncheck readme.md for further info!\n"; exit 0;
+    fi
+done
+for arg in "$@"; do
+    if [ "$arg" == "-c" ]; then
+        echo "clearing backup directory..."
+        cd "$backup_path" || { echo "сould not access backup_path."; exit 1; } 
+        rm -rf *.zip;
+
+        # check if -t is present
+        repeat_hours=""
+        while [[ "$#" -gt 0 ]]; do
+            if [[ "$1" == "-t" ]]; then
+                shift
+                repeat_hours="$1"
+            fi
+            if [[ "$1" == "-o" ]]; then
+                shift
+                backup_path="$1"
+            fi
+            shift
+        done
+        if [ -n "$repeat_hours" ]; then
+            if ! which crontab &> /dev/null; then
+                echo "warning: cron daemon not installed, the schedule will not be set."
+            else
+                cron_time=$(date -d "+$repeat_hours hours" +"%M %H %d %m *")
+                (crontab -l 2>/dev/null; echo "$cron_time $path_to_script/$0 -o $backup_path -c") | crontab -
+                echo "script will repeat every $repeat_hours hours."
+            fi
+        fi
+
+        exit 0
+    fi
+done
+
+flag_k=false;
+while [[ "$1" != "" ]]; do
+    case $1 in
+        -h)
+            exit 0
+            ;;
+        -c)
+            exit 0
+            ;;
+        -o)
+            shift
+            backup_path=$1
+            ;;
+        -e)
+            shift
+            while [[ "$1" != "" && "$1" != -* ]]; do
+                extensions+=("$1")
+                shift
+            done
+            continue
+            ;;
+        -t)
+            shift
+            repeat_hours=$1
+            ;;
+        -n)
+            shift
+            max_backups=$1
+            ;;
+        -k)
+            flag_k=true
+            shift
+            checksum_path=$1
+            ;;
+        -p)
+            shift
+            path=$1
+            ;;
+        *)
+            echo "Invalid option: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+#echo "$path"
+#echo "${extensions[1]}"
+
+# format $path and $backup_path and check if they exist (dumb)
+if [ ! -d "$path" ] && [ -z ${checksum_path+x} ]; then echo "wrong path specified. type -h for help."; exit 1; fi
+if [ "${path: -1}" != "/" ]; then
+    path+="/"
+fi
+if [ -z ${backup_path+x} ]; then 
+    echo "path to save backups not found. defaulting to ~/.backup-tk..."
+    backup_path=~/.backup-tk
+fi
+if [ ! -d "$backup_path" ]; then 
+    mkdir -p "$backup_path"; 
+fi
+if [ "${backup_path: -1}" != "/" ]; then
+    backup_path+="/"
+fi
+
+# weird attempt at checking whether the archive was zipped correctly (-k)
+# -k flag overrides other flags unless -h or -c are specified  
+if $flag_k; then
+    if [ ! -f "$checksum_path" ]; then
+        echo "wrong path specified. type -h for help.";
+        exit 1
+    fi
+    mkdir "$backup_path"temp
+    unzip "$checksum_path" -d "$backup_path"temp 1>/dev/null
+    mv "$backup_path"temp/checksum.txt "$backup_path" || { echo "could not access backup_path"; exit 1; }
+    touch "$backup_path/checksum_new.txt"
+    cd "$backup_path"temp || { echo "сould not access backup_path."; exit 1; }
+    for file in *; do
+        sha256sum "$file" | cut -d' ' -f1 >> "$backup_path/checksum_new.txt"
+    done
+    sorted_original_checksums=$(sort <(cut -d' ' -f1 "$backup_path/checksum.txt"))
+    sorted_new_checksums=$(sort <(cut -d' ' -f1 "$backup_path/checksum_new.txt"))
+    if diff -q <(echo "$sorted_original_checksums") <(echo "$sorted_new_checksums") 1>/dev/null; then
+        echo "yes"
+    else
+        echo "no"
+    fi
+    rm -rf "$backup_path"temp
+    rm "$backup_path/checksum_new.txt"
+    rm "$backup_path/checksum.txt"
+    exit 0
+fi
+
+# create backup
+mkdir -p "$backup_path"temp
+touch "$backup_path"temp/checksum.txt
+n_zip=$(ls "$backup_path"/*.zip 2>/dev/null | wc -l)
+n_zip=$((n_zip + 1));
+today=`date +"%F"`
+if [ ${#extensions[@]} -eq 0 ]; then
+    for file in "$path"*; do
+        if [ -f "$file" ]; then
+            zip -j "$backup_path"backup-"$n_zip"_"$today".zip "$file" 1>/dev/null
+            sha256sum "$file" >> "$backup_path"temp/checksum.txt
+        fi
+    done
+else
+    for file in "$path"*; do
+        if [ -f "$file" ]; then
+            for ext in "${extensions[@]}"; do
+                if [[ "$file" == *"$ext" ]]; then
+                    zip -j "$backup_path"backup-"$n_zip"_"$today".zip "$file" 1>/dev/null
+                    sha256sum "$file" >> "$backup_path"temp/checksum.txt
+                fi
+            done
+        fi
+    done
+fi
+zip -j "$backup_path"backup-"$n_zip"_"$today".zip "$backup_path"temp/checksum.txt 1>/dev/null
+rm -rf "$backup_path"temp
+echo "created backup-"$n_zip"_"$today".zip in "$backup_path""
+
+# delete old backups if $max_backups is specified (-n)
+if [ ! -z ${max_backups+x} ]; then
+    cd "$backup_path" || { echo "сould not access backup_path."; exit 1; }
+    num_zip=$(ls -1 *.zip 2>/dev/null | wc -l)
+    while [ "$num_zip" -gt "$max_backups" ]; do
+        oldest_zip=$(find . -maxdepth 1 -name "*.zip" -type f -printf '%T@ %p\n' | sort -n | head -n 1 | cut -d' ' -f2-)
+        rm -f "$oldest_zip"
+        num_zip=$(ls -1 *.zip 2>/dev/null | wc -l)
+    done
+fi
+
+# add autobackups if $repeat_hours is specified (-t)
+if [ ! -z ${repeat_hours+x} ]; then
+    if ! which crontab &> /dev/null; then
+        echo "warning: cron daemon not installed, the schedule will not be set."
+    else
+        cron_time=$(date -d "+$repeat_hours hours" +"%M %H %d %m *")
+        if [ ! -z ${max_backups+x} ]; then
+            (crontab -l 2>/dev/null; echo "$cron_time $path_to_script/$0 -o $backup_path -e ${extensions[@]} -n "$max_backups" -p $path") | crontab -
+        else
+            (crontab -l 2>/dev/null; echo "$cron_time $path_to_script/$0 -o $backup_path -e ${extensions[@]} -p $path") | crontab -
+        fi
+        echo "script will repeat every $repeat_hours hours."
+    fi
+fi
+
+
+
+
