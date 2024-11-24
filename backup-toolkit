@@ -25,7 +25,7 @@ for arg in "$@"; do
     if [ "$arg" == "-c" ]; then
         echo "clearing backup directory..."
         cd "$backup_path" || { echo "сould not access backup_path."; exit 1; } 
-        rm -rf *.zip;
+        rm -rf ./*.zip;
 
         # check if -t is present
         repeat_hours=""
@@ -152,7 +152,7 @@ mkdir -p "$backup_path"temp
 touch "$backup_path"temp/checksum.txt
 n_zip=$(ls "$backup_path"/*.zip 2>/dev/null | wc -l)
 n_zip=$((n_zip + 1));
-today=`date +"%F"`
+today=$(date +"%F")
 if [ ${#extensions[@]} -eq 0 ]; then
     for file in "$path"*; do
         if [ -f "$file" ]; then
@@ -174,16 +174,16 @@ else
 fi
 zip -j "$backup_path"backup-"$n_zip"_"$today".zip "$backup_path"temp/checksum.txt 1>/dev/null
 rm -rf "$backup_path"temp
-echo "created backup-"$n_zip"_"$today".zip in "$backup_path""
+echo created backup-"$n_zip"_"$today".zip in "$backup_path"
 
 # delete old backups if $max_backups is specified (-n)
 if [ ! -z ${max_backups+x} ]; then
     cd "$backup_path" || { echo "сould not access backup_path."; exit 1; }
-    num_zip=$(ls -1 *.zip 2>/dev/null | wc -l)
+    num_zip=$(ls -1 ./*.zip 2>/dev/null | wc -l)
     while [ "$num_zip" -gt "$max_backups" ]; do
         oldest_zip=$(find . -maxdepth 1 -name "*.zip" -type f -printf '%T@ %p\n' | sort -n | head -n 1 | cut -d' ' -f2-)
         rm -f "$oldest_zip"
-        num_zip=$(ls -1 *.zip 2>/dev/null | wc -l)
+        num_zip=$(ls -1 ./*.zip 2>/dev/null | wc -l)
     done
 fi
 
@@ -194,14 +194,20 @@ if [ ! -z ${repeat_hours+x} ]; then
     else
         cron_time=$(date -d "+$repeat_hours hours" +"%M %H %d %m *")
         if [ ! -z ${max_backups+x} ]; then
-            (crontab -l 2>/dev/null; echo "$cron_time $path_to_script/$0 -o $backup_path -e ${extensions[@]} -n "$max_backups" -p $path") | crontab -
+            cron_command="$cron_time $path_to_script/$0 -o $backup_path -e"
+            for ext in "${extensions[@]}"; do
+                cron_command+=" $ext"
+            done
+            cron_command+=" -n $max_backups -p $path"
+            (crontab -l 2>/dev/null; echo "$cron_command") | crontab -
         else
-            (crontab -l 2>/dev/null; echo "$cron_time $path_to_script/$0 -o $backup_path -e ${extensions[@]} -p $path") | crontab -
+            cron_command="$cron_time $path_to_script/$0 -o $backup_path -e"
+            for ext in "${extensions[@]}"; do
+                cron_command+=" $ext"
+            done
+            cron_command+=" -p $path"
+            (crontab -l 2>/dev/null; echo "$cron_command") | crontab -
         fi
         echo "script will repeat every $repeat_hours hours."
     fi
 fi
-
-
-
-
